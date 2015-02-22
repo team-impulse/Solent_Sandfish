@@ -28,6 +28,7 @@
  * Verbosity - 0=no debug, 1=normal, 2=very verbose
  * Boolean sign for latitude (this software assumes longitude will always be positive)
  * Radius of location accuracy required at waypoints (m)
+ * Tolerance on heading (governed by induced magnetometer inaccuracy)
  * Period between transmissions (during which the radio will be receiving)
  * Period between sensor readings
  */
@@ -44,8 +45,9 @@ const byte motor_pins[] = {3,4,14,15};//a1,a2,b1,b2
 #define gps_serial_baud_rate 9600
 #define computer_serial_baud_rate 38400
 
-#define serial_debug_verbosity 1 //verbosity for Serial debug
-#define current_software_version "0.01.02"//Major revision; minor revision; build
+#define verbosity 1 //verbosity for Serial debug
+#define current_software_version "0.01.04"//Major revision; minor revision; build
+#define heading_tolerance 5
 
 #define latitude_sign_positive false //Latitude sign
 #define waypoint_acc_radius 5
@@ -66,6 +68,7 @@ const byte motor_pins[] = {3,4,14,15};//a1,a2,b1,b2
  * Sensor reading timer
  * Packet incremental counter
  * Packet received boolean
+ * Manual motor control status
  */
 TinyGPSPlus gps;//GPS object
 SensLib sns;//sensor object
@@ -77,6 +80,7 @@ uint32_t radio_transmit_timer;
 uint32_t sensor_read_timer;
 byte pkt_inc=0;
 boolean pkt_rx = false;
+byte manual[] = {255,255};//assign to 255 to disable override, otherwise setting as normal.
 
 /* Misc declarations/definitions
  * Prototype for assemblePacket statement--references apparently confuse the Arduino/Processing compiler, which is peculiar.
@@ -87,12 +91,12 @@ boolean pkt_rx = false;
  
  
  void setup(){
-  #if serial_debug_verbosity != 0
+  #if verbosity != 0
   Serial.begin(computer_serial_baud_rate);
   Serial.print("Team Impulse CanSat firmware v");
   Serial.print(current_software_version);
   Serial.print("  ('Solent Sandfish'). Operating with verbosity: ");
-  Serial.println(serial_debug_verbosity);
+  Serial.println(verbosity);
   #endif
   Serial1.begin(gps_serial_baud_rate);
   SPI.begin();//Join the SPI bus
@@ -149,21 +153,48 @@ void loop(){;
     attachInterrupt(7,RFMISR,RISING);
     radio_transmit_timer = millis();
   }
-  if(future_waypoints_len==0){//If there are no more waypoints to visit
+  if(future_waypoints_len==0 && manual[0]==255){//If there are no more waypoints to visit
     byte motor_control[] = {1,1};
     writeMotors(motor_control);//stop.
   }
-  else{//assuming we have not visited every waypoint
+  else if(manual[0]==255){//assuming we have not visited every waypoint
     double dist_to_next = TinyGPSPlus::distanceBetween(gps.location.lat(),gps.location.lng(),future_waypoints[0],future_waypoints[1]);//distance to the next waypoint in metres
     if(dist_to_next <= waypoint_acc_radius){//if we've arrived within 5 metres
       leftShiftWpt();//get rid of that waypoint so we can proceed to the next
     }
     else{//nav code here
-      
-      
-      
+      double course_to_next = TinyGPSPlus::courseTo(gps.location.lat(),gps.location.lng(),future_waypoints[0],future_waypoints[1]);
+      int16_t crs_change = detChange((uint16_t)magnetometer.heading(),course_to_next);
+      byte m[2] = {2,2};
+      if(crs_change > heading_tolerance){//if the heading error is outside tolerance
+        m[0] = 1;
+      }
+      else if(crs_change < -heading_tolerance){
+        m[1] =1;
+      }
+      else byte m[] = {2,2};
+      writeMotors(m);
     }
   }
+  else{
+    writeMotors(manual);
+    #if verbosity > 1
+    Serial.println("Manual motor control. Writing:");
+    Serial.print(manual[0]);
+    Serial.print(" -- ");
+    Serial.println(manual[1]);
+    Serial.println();
+    #endif
+  }
+}
+
+int16_t detChange(uint16_t old, uint16_t changed){//course change mechanism
+    changed += 360;
+    int16_t diff = changed - old;
+    if(diff > 180){
+        diff = -1 * (360-diff);
+    }
+    return diff;
 }
 
 void leftShiftWpt(){
