@@ -8,7 +8,7 @@
  * TinyGPS++ - GPS data processing
  * SensLib--custom library to read sensor data
  * RFMLib--custom library to perform interface with radio modules
- * Servo--parachute release servos
+ * Servo--parachute release servo and strut release servo
  * LSM303--magnetometer library
  */
 #include <TinyGPS++.h>
@@ -21,6 +21,13 @@
 
 /* Constants:
  * LoRa pins; as the name implies
+ * The number of bytes implied by each command byte
+ * Para release servo pin
+ * Strut release servo pin
+ * Boolean - parachute released
+ * Boolean - parachute armed
+ * Linear servo--smallest safe
+ * Linear servo--largest safe
  * Motor control pins--motorA and motorB are the two sides of the H-bridge driver.
  * Sensor pins; as implied.
  * Serial baud rate for the GPS
@@ -38,6 +45,20 @@
 #define dio5 16
 #define rfm_rst 21
 
+//radio command lengths
+const byte cmd_lengths[8] = {0,8,2,1,1,2,2,2};
+//servo pins
+#define para_release_pin 23
+#define strut_release_pin 5 //----TBC
+
+//servo limits
+#define servo_max_angle 150
+#define servo_min_angle 20
+
+//Parachute state
+boolean para_released = false;
+boolean para_armed = false;
+
 //motor pins
 const byte motor_pins[] = {3,4,14,15};//a1,a2,b1,b2
 
@@ -46,11 +67,15 @@ const byte motor_pins[] = {3,4,14,15};//a1,a2,b1,b2
 #define computer_serial_baud_rate 38400
 
 #define verbosity 1 //verbosity for Serial debug
-#define current_software_version "0.01.04"//Major revision; minor revision; build
+#define current_software_version "0.01.14"//Major revision; minor revision; build
 #define heading_tolerance 5
 
 #define latitude_sign_positive false //Latitude sign
 #define waypoint_acc_radius 5
+
+
+
+  
 
 //timers
 #define radio_transmit_period 700 //time in milliseconds
@@ -62,6 +87,8 @@ const byte motor_pins[] = {3,4,14,15};//a1,a2,b1,b2
  * SensLib - responsible for communication with sensors and decoding of their data
  * RFMLib - responsible for communication with the radio module. Abstraction layer.
  * LSM303 - magnetometer
+ * Servo - parachute release
+ * Servo - strut deployment
  * Next waypoints--capacity for five waypoints
  * Length of next waypoints array
  * Radio transmission timer.
@@ -74,13 +101,15 @@ TinyGPSPlus gps;//GPS object
 SensLib sns;//sensor object
 RFMLib radio = RFMLib(nss,dio0,dio5,rfm_rst);//radio object
 LSM303 magnetometer;
+Servo para_release;
+Servo strut_release;
 double future_waypoints[10];//Long, lat; long,lat;long,lat...
 byte future_waypoints_len;
 uint32_t radio_transmit_timer;
 uint32_t sensor_read_timer;
 byte pkt_inc=0;
 boolean pkt_rx = false;
-byte manual[] = {255,255};//assign to 255 to disable override, otherwise setting as normal.
+byte manual[] = {1,1};//assign to 255 to disable override, otherwise setting as normal.
 
 /* Misc declarations/definitions
  * Prototype for assemblePacket statement--references apparently confuse the Arduino/Processing compiler, which is peculiar.
@@ -88,9 +117,16 @@ byte manual[] = {255,255};//assign to 255 to disable override, otherwise setting
  */
  
  void assemblePacket(RFMLib::Packet &pkt);
+ void decodePacket(RFMLib::Packet pkt);
  
  
  void setup(){
+   //initialise servos--this is a matter of urgency.
+  para_release.attach(para_release_pin);
+  para_release.write(servo_min_angle);
+  strut_release.attach(strut_release_pin);
+  strut_release.write(servo_min_angle);//-----TBC
+  
   #if verbosity != 0
   Serial.begin(computer_serial_baud_rate);
   Serial.print("Team Impulse CanSat firmware v");
@@ -120,12 +156,16 @@ byte manual[] = {255,255};//assign to 255 to disable override, otherwise setting
 
 void loop(){;
   if(radio.rfm_done) finishRFM();
+  if(para_armed && para_released){
+    para_release.write(servo_max_angle); 
+  }
   while(Serial1.available())gps.encode(Serial1.read());//Read in NMEA GPS data
-  sns.pollMS5637();
-  sns.pollHYT271();
-  magnetometer.read();//read everything
   
   if((millis()-radio_transmit_timer) > radio_transmit_period && radio.rfm_status != 1){
+      sns.pollMS5637();
+      sns.pollHYT271();
+      magnetometer.read();//read everything
+
      //We're due to transmit--stop anything else
     if(radio.rfm_status == 2){
      #if verbosity != 0
@@ -139,6 +179,7 @@ void loop(){;
     }
     RFMLib::Packet pkt;
     assemblePacket(pkt);  
+
     #if verbosity > 1
     Serial.println("About to transmit:");
     for(int i = 0;i<pkt.len;i++){
@@ -252,6 +293,7 @@ void rxDone(){
   #endif
   RFMLib::Packet rx;
   radio.endRX(rx);
+  decodePacket(rx);
 }
 
 
@@ -259,7 +301,80 @@ void RFMISR(){
  radio.rfm_done = true; 
 }
 
+void decodePacket(RFMLib::Packet pkt){
+  byte i = 0;
+  #if verbosity != 0
+  Serial.println("Packet received: ");
+  #endif
+  #if verbosity > 2
+  for(byte a = 0;a<pkt.len;a++){
+   Serial.println(pkt.data[a]); 
+  }
+  #endif
+  while(i<pkt.len){
+     switch(pkt.data[i]){
+       case 0:
+         #if verbosity != 0
+         Serial.print("  OK  ");
+         #endif
+       break;
+       case 1:
+         #if verbosity != 0
+         Serial.print("  ADD waypoint  ");
+         #endif
+         byte coords[cmd_lengths[1]];
+         i++;
+         for(int z = 0;z<cmd_lengths[1];z++){
+           coords[z] = pkt.data[i];
+           i++;
+         }
+         addWpt(coords);
+         break;
+       case 2:
+         i++;
+         manual[0] = pkt.data[i];
+         i++;
+         manual[1] = pkt.data[i];
+         i++;
+       break;
+       case 3:
+         //arm parachute       
+           i+=2;
+           para_armed = true;
+       break;
+       case 4://arm strut
+       
+       break;
+       case 5://release parachute
+         i++;
+         if(pkt.data[i] == pkt.data[i+1] && pkt.data[i]==255)
+           para_released = true;
+       break;
+       case 6://release strut
+       
+       break;
+       case 7://delete all waypoints and stop
+         while(future_waypoints_len>0)
+           leftShiftWpt();
+         manual[0] = 1;
+         manual[1] = 1;
+       break;
+     } 
+  }
+}
 
+void addWpt(byte coords [8]){
+  uint32_t coord_raw = (coords[0]<<24) | (coords[1]<<16) | (coords[2]<<8) | coords[3];
+  double longitude = coord_raw / 1000000;
+  coord_raw = (coords[4]<<24) | (coords[5]<<16) | (coords[6]<<8) | coords[7];
+  double latitude = coord_raw / 1000000;
+  if(!latitude_sign_positive)
+    latitude *= -1;
+  byte lat_index = future_waypoints_len * 2;
+  future_waypoints[lat_index] = latitude;
+  future_waypoints[lat_index+1] = longitude;
+  future_waypoints_len++;
+}
 
 void assemblePacket(RFMLib::Packet &pkt){
   //round the pressure and shave a decimal place off
@@ -303,7 +418,7 @@ void assemblePacket(RFMLib::Packet &pkt){
   
   pkt.data[20] = gps.hdop.value();
   #if verbosity != 0
-  Serial.print("GPS verbosity: ");
+  Serial.print("GPS accuracy: ");
   Serial.println(gps.hdop.value());
   #endif
   //incremental counter
