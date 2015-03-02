@@ -18,7 +18,6 @@
 #include <sensor_library.h>
 #include <RFM98W_library.h>
 #include <LSM303.h>
-
 /* Constants:
  * LoRa pins; as the name implies
  * The number of bytes implied by each command byte
@@ -67,18 +66,15 @@ const byte motor_pins[] = {3,4,14,15};//a1,a2,b1,b2
 #define computer_serial_baud_rate 38400
 
 #define verbosity 1 //verbosity for Serial debug
-#define current_software_version "0.01.14"//Major revision; minor revision; build
+#define current_software_version "0.01.20"//Major revision; minor revision; build
 #define heading_tolerance 5
 
 #define latitude_sign_positive false //Latitude sign
 #define waypoint_acc_radius 5
 
 
-
-  
-
 //timers
-#define radio_transmit_period 700 //time in milliseconds
+#define radio_transmit_period 1000 //time in milliseconds
 #define sensor_reading_period 100
 
 /*
@@ -154,46 +150,17 @@ byte manual[] = {1,1};//assign to 255 to disable override, otherwise setting as 
    radio_transmit_timer = millis();
 }
 
-void loop(){;
+void loop(){
+  #if verbosity > 3
+  delay(50);//need this delay if printing everything to avoid crashing the serial monitor
+  #endif
   if(radio.rfm_done) finishRFM();
   if(para_armed && para_released){
     para_release.write(servo_max_angle); 
   }
   while(Serial1.available())gps.encode(Serial1.read());//Read in NMEA GPS data
-  
-  if((millis()-radio_transmit_timer) > radio_transmit_period && radio.rfm_status != 1){
-      sns.pollMS5637();
-      sns.pollHYT271();
-      magnetometer.read();//read everything
-
-     //We're due to transmit--stop anything else
-    if(radio.rfm_status == 2){
-     #if verbosity != 0
-     Serial.println("Aborting reception - transmit time.");
-     #endif
-     RFMLib::Packet rx;//throwaway reception packet--we do nothing with this data
-     radio.endRX(rx);
-     #if verbosity != 0
-     Serial.println("Aborted reception.");
-     #endif
-    }
-    RFMLib::Packet pkt;
-    assemblePacket(pkt);  
-
-    #if verbosity > 1
-    Serial.println("About to transmit:");
-    for(int i = 0;i<pkt.len;i++){
-      Serial.print(pkt.data[i]);
-      Serial.print("-");
-    }
-    #endif   
-    radio.beginTX(pkt);
-    #if verbosity != 0
-    Serial.println("Began transmit.");
-    #endif
-    attachInterrupt(7,RFMISR,RISING);
-    radio_transmit_timer = millis();
-  }
+  if((millis()-radio_transmit_timer) > radio_transmit_period && radio.rfm_status != 1)
+    transmitTime();
   if(future_waypoints_len==0 && manual[0]==255){//If there are no more waypoints to visit
     byte motor_control[] = {1,1};
     writeMotors(motor_control);//stop.
@@ -219,7 +186,7 @@ void loop(){;
   }
   else{
     writeMotors(manual);
-    #if verbosity > 1
+    #if verbosity > 5
     Serial.println("Manual motor control. Writing:");
     Serial.print(manual[0]);
     Serial.print(" -- ");
@@ -236,6 +203,18 @@ int16_t detChange(uint16_t old, uint16_t changed){//course change mechanism
         diff = -1 * (360-diff);
     }
     return diff;
+}
+
+void transmitTime(){
+      if(radio.rfm_status==2){
+      RFMLib::Packet p;
+     radio.endRX( p);
+    }
+    RFMLib::Packet p;
+    assemblePacket(p);
+    radio.beginTX(p); 
+    attachInterrupt(7,RFMISR,RISING);
+    radio_transmit_timer = millis();
 }
 
 void leftShiftWpt(){
@@ -268,7 +247,7 @@ void writeMotors(byte cont[2]){
 
 void finishRFM(){
   switch(radio.rfm_status){
-   case 1:
+  case 1:
      #if verbosity != 0
      Serial.println("Ending transmission.");
      #endif
@@ -277,23 +256,19 @@ void finishRFM(){
      Serial.println("Beginning reception.");
      #endif
      radio.beginRX();
+     radio.rfm_done = false;
+         attachInterrupt(7,RFMISR,RISING);
      break;
-   case 2:
+     case 2:
      #if verbosity != 0
      Serial.println("Ending reception.");
-     #endif
-     rxDone();
+     #endif 
+     RFMLib::Packet rx;
+     radio.endRX(rx);
+     decodePacket(rx);
      break;
-  } 
-}
+   }
 
-void rxDone(){
-  #if verbosity != 0
-  Serial.println("RX done function. Hooray.");
-  #endif
-  RFMLib::Packet rx;
-  radio.endRX(rx);
-  decodePacket(rx);
 }
 
 
@@ -304,63 +279,26 @@ void RFMISR(){
 void decodePacket(RFMLib::Packet pkt){
   byte i = 0;
   #if verbosity != 0
-  Serial.println("Packet received: ");
+  Serial.println("Packet to be decoded: ");
+  Serial.print("len = ");Serial.println(pkt.len);
   #endif
-  #if verbosity > 2
-  for(byte a = 0;a<pkt.len;a++){
-   Serial.println(pkt.data[a]); 
+  
+  while(i < pkt.len){
+   Serial.println(pkt.data[i]);
+   switch(pkt.data[i]){
+    case 0:
+     Serial.println("OK");
+     break;
+     
+    case 7:
+      Serial.println("Release:");
+      Serial.print(pkt.data[i+1]);Serial.print(" ");Serial.println(pkt.data[i+2]);
+      i+=2;
+    break;
+   } 
+   i++;
   }
-  #endif
-  while(i<pkt.len){
-     switch(pkt.data[i]){
-       case 0:
-         #if verbosity != 0
-         Serial.print("  OK  ");
-         #endif
-       break;
-       case 1:
-         #if verbosity != 0
-         Serial.print("  ADD waypoint  ");
-         #endif
-         byte coords[cmd_lengths[1]];
-         i++;
-         for(int z = 0;z<cmd_lengths[1];z++){
-           coords[z] = pkt.data[i];
-           i++;
-         }
-         addWpt(coords);
-         break;
-       case 2:
-         i++;
-         manual[0] = pkt.data[i];
-         i++;
-         manual[1] = pkt.data[i];
-         i++;
-       break;
-       case 3:
-         //arm parachute       
-           i+=2;
-           para_armed = true;
-       break;
-       case 4://arm strut
-       
-       break;
-       case 5://release parachute
-         i++;
-         if(pkt.data[i] == pkt.data[i+1] && pkt.data[i]==255)
-           para_released = true;
-       break;
-       case 6://release strut
-       
-       break;
-       case 7://delete all waypoints and stop
-         while(future_waypoints_len>0)
-           leftShiftWpt();
-         manual[0] = 1;
-         manual[1] = 1;
-       break;
-     } 
-  }
+  
 }
 
 void addWpt(byte coords [8]){
@@ -395,7 +333,7 @@ void assemblePacket(RFMLib::Packet &pkt){
   pkt.data[6] = (byte)(sns.humidity >> 8);
   pkt.data[7] = sns.humidity & 255;
   
-  //GPS longitude
+  //GPS latitude
   uint32_t raw_pos = gps.location.rawLat().billionths;
   pkt.data[8] = (byte)(raw_pos >> 24);
   pkt.data[9] = (byte)(raw_pos >> 16);
@@ -424,7 +362,6 @@ void assemblePacket(RFMLib::Packet &pkt){
   //incremental counter
   pkt.data[21] = pkt_inc;
   pkt_inc++;
-  
   //set length
-  pkt.len = 20;
+  pkt.len = 22;
 }
