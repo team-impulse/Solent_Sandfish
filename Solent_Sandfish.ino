@@ -28,6 +28,7 @@
  * Linear servo--smallest safe
  * Linear servo--largest safe
  * Motor control pins--motorA and motorB are the two sides of the H-bridge driver.
+ * Motors armed?
  * Sensor pins; as implied.
  * Serial baud rate for the GPS
  * Serial baud rate for computer serial comms.
@@ -55,11 +56,11 @@ const byte cmd_lengths[8] = {0,8,2,1,1,2,2,2};
 #define servo_min_angle 20
 
 //Parachute state
-boolean para_released = false;
 boolean para_armed = false;
 
 //motor pins
 const byte motor_pins[] = {3,4,14,15};//a1,a2,b1,b2
+boolean motors_armed = true;
 
 //serial baud rates
 #define gps_serial_baud_rate 9600
@@ -84,7 +85,6 @@ const byte motor_pins[] = {3,4,14,15};//a1,a2,b1,b2
  * RFMLib - responsible for communication with the radio module. Abstraction layer.
  * LSM303 - magnetometer
  * Servo - parachute release
- * Servo - strut deployment
  * Next waypoints--capacity for five waypoints
  * Length of next waypoints array
  * Radio transmission timer.
@@ -98,14 +98,13 @@ SensLib sns;//sensor object
 RFMLib radio = RFMLib(nss,dio0,dio5,rfm_rst);//radio object
 LSM303 magnetometer;
 Servo para_release;
-Servo strut_release;
 double future_waypoints[10];//Long, lat; long,lat;long,lat...
 byte future_waypoints_len;
 uint32_t radio_transmit_timer;
 uint32_t sensor_read_timer;
 byte pkt_inc=0;
 boolean pkt_rx = false;
-byte manual[] = {1,1};//assign to 255 to disable override, otherwise setting as normal.
+byte manual[] = {255,255};//assign to 255 to disable override, otherwise setting as normal.
 
 /* Misc declarations/definitions
  * Prototype for assemblePacket statement--references apparently confuse the Arduino/Processing compiler, which is peculiar.
@@ -120,8 +119,6 @@ byte manual[] = {1,1};//assign to 255 to disable override, otherwise setting as 
    //initialise servos--this is a matter of urgency.
   para_release.attach(para_release_pin);
   para_release.write(servo_min_angle);
-  strut_release.attach(strut_release_pin);
-  strut_release.write(servo_min_angle);//-----TBC
   
   #if verbosity != 0
   Serial.begin(computer_serial_baud_rate);
@@ -154,10 +151,8 @@ void loop(){
   #if verbosity > 3
   delay(50);//need this delay if printing everything to avoid crashing the serial monitor
   #endif
+  magnetometer.read();
   if(radio.rfm_done) finishRFM();
-  if(para_armed && para_released){
-    para_release.write(servo_max_angle); 
-  }
   while(Serial1.available())gps.encode(Serial1.read());//Read in NMEA GPS data
   if((millis()-radio_transmit_timer) > radio_transmit_period && radio.rfm_status != 1)
     transmitTime();
@@ -165,7 +160,7 @@ void loop(){
     byte motor_control[] = {1,1};
     writeMotors(motor_control);//stop.
   }
-  else if(manual[0]==255){//assuming we have not visited every waypoint
+  else if(manual[0]==255 && motors_armed){//assuming we have not visited every waypoint
     double dist_to_next = TinyGPSPlus::distanceBetween(gps.location.lat(),gps.location.lng(),future_waypoints[0],future_waypoints[1]);//distance to the next waypoint in metres
     if(dist_to_next <= waypoint_acc_radius){//if we've arrived within 5 metres
       leftShiftWpt();//get rid of that waypoint so we can proceed to the next
@@ -184,7 +179,7 @@ void loop(){
       writeMotors(m);
     }
   }
-  else{
+  else if(motors_armed){
     writeMotors(manual);
     #if verbosity > 5
     Serial.println("Manual motor control. Writing:");
@@ -193,6 +188,10 @@ void loop(){
     Serial.println(manual[1]);
     Serial.println();
     #endif
+  }
+  else{//motors not armed
+   byte motor_cnt[] = {1,1};
+   writeMotors(motor_cnt); 
   }
 }
 
@@ -282,22 +281,78 @@ void decodePacket(RFMLib::Packet pkt){
   Serial.println("Packet to be decoded: ");
   Serial.print("len = ");Serial.println(pkt.len);
   #endif
-  
+  if(pkt.crc){
   while(i < pkt.len){
+    #if verbosity > 0
    Serial.println(pkt.data[i]);
+   #endif
    switch(pkt.data[i]){
-    case 0:
+    case 0://general status OK - 1 byte
+    #if verbosity > 0
      Serial.println("OK");
+     #endif
      break;
-     
+    case 1://add waypoint-8 bytes
+    #if verbosity > 0
+    Serial.println("Waypoint add request.");
+    #endif
+      if(future_waypoints_len <5){
+        byte base_index = future_waypoints_len *2;
+        future_waypoints_len++;
+        future_waypoints[base_index] = ((pkt.data[i+1]<<24)|(pkt.data[i+2]<<16)| (pkt.data[i+3]<<8)|pkt.data[i+4])/1000000;
+        if(!latitude_sign_positive)
+          future_waypoints[base_index] *= -1; 
+        
+        future_waypoints[base_index+1] = ((pkt.data[i+5]<<24)|(pkt.data[i+6]<<16)| (pkt.data[i+7]<<8)|pkt.data[i+8])/1000000;
+        #if verbosity > 0
+        Serial.println("Waypoint added.");
+        #endif
+      }
+      #if verbosity > 0
+      else Serial.println("No more waypoint slots available now.");
+      #endif
+      i+=8;
+    break;
+    case 2://manual motor control-two bytes
+      manual[0]=pkt.data[i+1];
+      manual[1]=pkt.data[i+2];
+      i+=2;
+    break;
+    case 3:
+      para_armed = true;
+    break;
+    case 4://arm the motors - 2 bytes
+      if (pkt.data[i+1]==255)
+      motors_armed =true;
+      else motors_armed = false;
+      i++;
+      #if verbosity > 0
+      Serial.println("Motors armed.");
+      #endif
+    break;
+    case 5://arm parachute - 1 byte
+      para_armed = true;
+      #if verbosity > 0
+      Serial.println("Armed parachute");
+      #endif
+    break;
+    case 6://left unused now
+    break;  
     case 7:
+      #if verbosity > 0
       Serial.println("Release:");
-      Serial.print(pkt.data[i+1]);Serial.print(" ");Serial.println(pkt.data[i+2]);
+      #endif
       i+=2;
     break;
    } 
    i++;
   }
+  }
+  #if verbosity > 0
+    else
+      Serial.println("CRC failed.");
+  #endif
+  
   
 }
 
@@ -315,11 +370,20 @@ void addWpt(byte coords [8]){
 }
 
 void assemblePacket(RFMLib::Packet &pkt){
-  //round the pressure and shave a decimal place off
-  sns.pressure = (sns.pressure / 10) + ((sns.pressure % 10)>4) ? 1 : 0 ;//this makes sure that the pressure fits into a 16 bit int
+  sns.pollMS5637();
+  sns.pollHYT271();
+  //round the pressure and shave a decimal place off to fit it into 16 bits
   //saving two bytes of valuable bandwidth
-  pkt.data[0] = (byte)(sns.pressure >> 8);//pressure
-  pkt.data[1] = sns.pressure & 255;
+  int32_t pr_calc = sns.pressure;
+  byte round_byte = ((pr_calc % 10)>4)?1:0;
+  pr_calc /= 10;
+  pr_calc += (int16_t) round_byte;
+    #if verbosity > 0
+  Serial.println((int16_t)pr_calc);
+  #endif
+  uint16_t small_pressure = (uint16_t) pr_calc;
+  pkt.data[0] = (byte)(small_pressure >> 8);//pressure
+  pkt.data[1] = small_pressure & 255;
   
   //HYT271 temp
   pkt.data[2] = (byte)(sns.external_temperature>>8);
