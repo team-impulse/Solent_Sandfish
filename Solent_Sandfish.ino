@@ -48,7 +48,7 @@
 //radio command lengths
 const byte cmd_lengths[8] = {0,8,2,1,1,2,2,2};
 //servo pins
-#define para_release_pin 23
+#define para_release_pin 22
 #define strut_release_pin 5 //----TBC
 
 //servo limits
@@ -59,7 +59,7 @@ const byte cmd_lengths[8] = {0,8,2,1,1,2,2,2};
 boolean para_armed = false;
 
 //motor pins
-const byte motor_pins[] = {3,4,14,15};//a1,a2,b1,b2
+const byte motor_pins[] = {4,3,14,15};//a1,a2,b1,b2
 boolean motors_armed = true;
 
 //serial baud rates
@@ -104,7 +104,7 @@ uint32_t radio_transmit_timer;
 uint32_t sensor_read_timer;
 byte pkt_inc=0;
 boolean pkt_rx = false;
-byte manual[] = {255,255};//assign to 255 to disable override, otherwise setting as normal.
+byte manual[] = {2,2};//assign to 255 to disable override, otherwise setting as normal.
 
 /* Misc declarations/definitions
  * Prototype for assemblePacket statement--references apparently confuse the Arduino/Processing compiler, which is peculiar.
@@ -116,6 +116,8 @@ byte manual[] = {255,255};//assign to 255 to disable override, otherwise setting
  
  
  void setup(){
+   pinMode(3,OUTPUT);
+   pinMode(4,OUTPUT);
    //initialise servos--this is a matter of urgency.
   para_release.attach(para_release_pin);
   para_release.write(servo_min_angle);
@@ -136,14 +138,15 @@ byte manual[] = {255,255};//assign to 255 to disable override, otherwise setting
   sns.initialise();//initialise the sensors connected over I2C
   magnetometer.init();//start the magnetometer
   magnetometer.enableDefault();
-  magnetometer.m_min = (LSM303::vector<int16_t>){-32767, -32767, -32767};
-  magnetometer.m_max = (LSM303::vector<int16_t>){+32767, +32767, +32767};//set compass calibration values
+  magnetometer.m_min = (LSM303::vector<int16_t>){ -1296,     +0,   -775};
+  magnetometer.m_max = (LSM303::vector<int16_t>){    +0,   +452,     +0};//set compass calibration values
   
   //Motor initialisation
   for(byte i = 0;i<5;i++){
     pinMode(motor_pins[i],OUTPUT);
     digitalWrite(motor_pins[i],LOW);
   }   
+
    radio_transmit_timer = millis();
 }
 
@@ -280,12 +283,12 @@ void decodePacket(RFMLib::Packet pkt){
   #if verbosity != 0
   Serial.println("Packet to be decoded: ");
   Serial.print("len = ");Serial.println(pkt.len);
+       for(int k = 0;k<pkt.len;k++)Serial.println(pkt.data[k]);
   #endif
-  if(pkt.crc){
+
+//  if(pkt.crc){
   while(i < pkt.len){
-    #if verbosity > 0
-   Serial.println(pkt.data[i]);
-   #endif
+
    switch(pkt.data[i]){
     case 0://general status OK - 1 byte
     #if verbosity > 0
@@ -316,6 +319,12 @@ void decodePacket(RFMLib::Packet pkt){
     case 2://manual motor control-two bytes
       manual[0]=pkt.data[i+1];
       manual[1]=pkt.data[i+2];
+      #if verbosity  > 0
+      Serial.println("Manual motors:");
+      Serial.print(manual[0]);
+      Serial.print(" ");
+      Serial.println(manual[1]);
+      #endif
       i+=2;
     break;
     case 3:
@@ -336,7 +345,13 @@ void decodePacket(RFMLib::Packet pkt){
       Serial.println("Armed parachute");
       #endif
     break;
-    case 6://left unused now
+    case 6://Drop all waypoints--2 bytes
+      if (pkt.data[i+1]==255){
+         future_waypoints_len=0;//delete all waypoints
+         #if verbosity > 0     
+         Serial.println("All waypoints deleted.");
+        #endif
+      }
     break;  
     case 7:
       #if verbosity > 0
@@ -346,11 +361,11 @@ void decodePacket(RFMLib::Packet pkt){
     break;
    } 
    i++;
-  }
+ // }
   }
   #if verbosity > 0
-    else
-      Serial.println("CRC failed.");
+  /*  else
+      Serial.println("CRC failed.");*/
   #endif
   
   
