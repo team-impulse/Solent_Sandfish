@@ -131,7 +131,7 @@ byte manual[] = {2,2};//assign to 255 to disable override, otherwise setting as 
   #endif
   Serial1.begin(gps_serial_baud_rate);
   SPI.begin();//Join the SPI bus
-  byte my_config[5] = {0x44,0x84,0x88,0xAC,0xCD};//radio settings
+  byte my_config[5] = {0x44,0x84,0x88,0x88,0xCD};//radio settings
   radio.configure(my_config);//Radio configuration
   
   Wire.begin();//join the I2C bus
@@ -433,10 +433,14 @@ void assemblePacket(RFMLib::Packet &pkt){
   pkt.data[18] = (byte)(raw_pos >> 8);
   pkt.data[19] = raw_pos & 255;
   
-  pkt.data[20] = gps.hdop.value();
+  pkt.data[20] = gps.hdop.value()/10;
   #if verbosity != 0
   Serial.print("GPS accuracy: ");
   Serial.println(gps.hdop.value());
+  Serial.print("Lat");
+  Serial.println(gps.location.lat(),6);
+  Serial.print("Lng");
+  Serial.println(gps.location.lng(),6);
   #endif
   //incremental counter
   pkt.data[21] = pkt_inc;
