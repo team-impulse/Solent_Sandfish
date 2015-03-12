@@ -48,7 +48,7 @@
 //radio command lengths
 const byte cmd_lengths[8] = {0,8,2,1,1,2,2,2};
 //servo pins
-#define para_release_pin 22
+#define para_release_pin 10
 #define strut_release_pin 5 //----TBC
 
 //servo limits
@@ -104,7 +104,7 @@ uint32_t radio_transmit_timer;
 uint32_t sensor_read_timer;
 byte pkt_inc=0;
 boolean pkt_rx = false;
-byte manual[] = {2,2};//assign to 255 to disable override, otherwise setting as normal.
+byte manual[] = {255,255};//assign to 255 to disable override, otherwise setting as normal.
 
 /* Misc declarations/definitions
  * Prototype for assemblePacket statement--references apparently confuse the Arduino/Processing compiler, which is peculiar.
