@@ -53,7 +53,7 @@ const byte cmd_lengths[8] = {0,8,2,1,1,2,2,2};
 
 //servo limits
 #define servo_max_angle 150
-#define servo_min_angle 20
+#define servo_min_angle 30
 
 //Parachute state
 boolean para_armed = false;
@@ -67,7 +67,7 @@ boolean motors_armed = true;
 #define computer_serial_baud_rate 38400
 
 #define verbosity 1 //verbosity for Serial debug
-#define current_software_version "0.01.20"//Major revision; minor revision; build
+#define current_software_version "1.0.1"//Major revision; minor revision; build
 #define heading_tolerance 5
 
 #define latitude_sign_positive false //Latitude sign
@@ -131,7 +131,7 @@ byte manual[] = {255,255};//assign to 255 to disable override, otherwise setting
   #endif
   Serial1.begin(gps_serial_baud_rate);
   SPI.begin();//Join the SPI bus
-  byte my_config[5] = {0x44,0x84,0x88,0x88,0xCD};//radio settings
+  byte my_config[5] = {0x44,0x84,0x88,0xAC,0xCD};//radio settings
   radio.configure(my_config);//Radio configuration
   
   Wire.begin();//join the I2C bus
@@ -354,10 +354,13 @@ void decodePacket(RFMLib::Packet pkt){
       }
     break;  
     case 7:
+    if(pkt.data[i+1]==255 && pkt.data[i+2]==255){
       #if verbosity > 0
       Serial.println("Release:");
       #endif
-      i+=2;
+      para_release.write(servo_max_angle);
+    }
+          i+=2;
     break;
    } 
    i++;
