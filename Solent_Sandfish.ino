@@ -59,7 +59,7 @@ const byte cmd_lengths[8] = {0,8,2,1,1,2,2,2};
 boolean para_armed = false;
 
 //motor pins
-const byte motor_pins[] = {4,3,14,15};//a1,a2,b1,b2
+const byte motor_pins[] = {14,15,3,4};//a1,a2,b1,b2
 boolean motors_armed = true;
 
 //serial baud rates
@@ -75,8 +75,8 @@ boolean motors_armed = true;
 
 
 //timers
-#define radio_transmit_period 1000 //time in milliseconds
-#define sensor_reading_period 100
+#define radio_transmit_period 750 //time in milliseconds
+#define sensor_reading_period radio_transmit_period-180
 
 /*
  * Global variables:
@@ -92,6 +92,8 @@ boolean motors_armed = true;
  * Packet incremental counter
  * Packet received boolean
  * Manual motor control status
+ * MS5637 read already?
+ * Time to read?
  */
 TinyGPSPlus gps;//GPS object
 SensLib sns;//sensor object
@@ -105,6 +107,9 @@ uint32_t sensor_read_timer;
 byte pkt_inc=0;
 boolean pkt_rx = false;
 byte manual[] = {255,255};//assign to 255 to disable override, otherwise setting as normal.
+
+boolean ms5637_read = false;
+boolean read_sens = false;
 
 /* Misc declarations/definitions
  * Prototype for assemblePacket statement--references apparently confuse the Arduino/Processing compiler, which is peculiar.
@@ -152,9 +157,23 @@ byte manual[] = {255,255};//assign to 255 to disable override, otherwise setting
 
 void loop(){
   #if verbosity > 3
-  delay(50);//need this delay if printing everything to avoid crashing the serial monitor
+  delay(5);//need this delay if printing everything to avoid crashing the serial monitor
   #endif
   magnetometer.read();
+  if(millis()-sensor_read_timer >= sensor_read_timer){
+    read_sens = true; 
+  }
+  if(read_sens){
+   if(ms5637_read){
+    sns.pollHYT271();
+    read_sens = false;
+    sensor_read_timer = millis(); 
+   }
+   else{
+    sns.pollMS5637();
+    ms5637_read = true; 
+   }
+  }
   if(radio.rfm_done) finishRFM();
   while(Serial1.available())gps.encode(Serial1.read());//Read in NMEA GPS data
   if((millis()-radio_transmit_timer) > radio_transmit_period && radio.rfm_status != 1)
@@ -196,6 +215,7 @@ void loop(){
    byte motor_cnt[] = {1,1};
    writeMotors(motor_cnt); 
   }
+
 }
 
 int16_t detChange(uint16_t old, uint16_t changed){//course change mechanism
@@ -217,6 +237,7 @@ void transmitTime(){
     radio.beginTX(p); 
     attachInterrupt(7,RFMISR,RISING);
     radio_transmit_timer = millis();
+    sensor_read_timer = millis();
 }
 
 void leftShiftWpt(){
@@ -388,8 +409,6 @@ void addWpt(byte coords [8]){
 }
 
 void assemblePacket(RFMLib::Packet &pkt){
-  sns.pollMS5637();
-  sns.pollHYT271();
   //round the pressure and shave a decimal place off to fit it into 16 bits
   //saving two bytes of valuable bandwidth
   int32_t pr_calc = sns.pressure;
@@ -416,19 +435,19 @@ void assemblePacket(RFMLib::Packet &pkt){
   pkt.data[7] = sns.humidity & 255;
   
   //GPS latitude
-  uint32_t raw_pos = gps.location.rawLat().billionths;
+  uint32_t raw_pos = (uint32_t)(gps.location.lat()*1000000);
   pkt.data[8] = (byte)(raw_pos >> 24);
   pkt.data[9] = (byte)(raw_pos >> 16);
   pkt.data[10] = (byte)(raw_pos >> 8);
   pkt.data[11] = raw_pos & 255;
   
   //and longitude
-  raw_pos = gps.location.rawLng().billionths;
+  raw_pos = (uint32_t)(gps.location.lng()*1000000);
   pkt.data[12] = (byte)(raw_pos >> 24);
   pkt.data[13] = (byte)(raw_pos >> 16);
   pkt.data[14] = (byte)(raw_pos >> 8);
   pkt.data[15] = raw_pos & 255;
-  
+  //nb lng and lat have fixed sign agreed beforehand.
   //heading
   raw_pos = (magnetometer.heading() * 100);
   pkt.data[16] = (byte)(raw_pos >> 24);
@@ -450,4 +469,6 @@ void assemblePacket(RFMLib::Packet &pkt){
   pkt_inc++;
   //set length
   pkt.len = 22;
+  
+  //ir data append here
 }
