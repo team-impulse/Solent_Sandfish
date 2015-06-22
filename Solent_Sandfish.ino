@@ -160,7 +160,7 @@ void loop(){
   delay(5);//need this delay if printing everything to avoid crashing the serial monitor
   #endif
   magnetometer.read();
-  if(millis()-sensor_read_timer >= sensor_read_timer){
+  if(millis()-sensor_read_timer >= sensor_reading_period){
     read_sens = true; 
   }
   if(read_sens){
@@ -168,6 +168,7 @@ void loop(){
     sns.pollHYT271();
     read_sens = false;
     sensor_read_timer = millis(); 
+    ms5637_read = false;
    }
    else{
     sns.pollMS5637();
@@ -393,19 +394,6 @@ void decodePacket(RFMLib::Packet pkt){
   #endif
   
   
-}
-
-void addWpt(byte coords [8]){
-  uint32_t coord_raw = (coords[0]<<24) | (coords[1]<<16) | (coords[2]<<8) | coords[3];
-  double longitude = coord_raw / 1000000;
-  coord_raw = (coords[4]<<24) | (coords[5]<<16) | (coords[6]<<8) | coords[7];
-  double latitude = coord_raw / 1000000;
-  if(!latitude_sign_positive)
-    latitude *= -1;
-  byte lat_index = future_waypoints_len * 2;
-  future_waypoints[lat_index] = latitude;
-  future_waypoints[lat_index+1] = longitude;
-  future_waypoints_len++;
 }
 
 void assemblePacket(RFMLib::Packet &pkt){
