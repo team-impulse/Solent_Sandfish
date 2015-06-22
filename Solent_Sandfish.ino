@@ -67,7 +67,7 @@ boolean motors_armed = true;
 #define computer_serial_baud_rate 38400
 
 #define verbosity 1 //verbosity for Serial debug
-#define current_software_version "1.0.1"//Major revision; minor revision; build
+#define current_software_version "1.3.2"//Major revision; minor revision; build
 #define heading_tolerance 5
 
 #define latitude_sign_positive false //Latitude sign
@@ -75,7 +75,7 @@ boolean motors_armed = true;
 
 
 //timers
-#define radio_transmit_period 750 //time in milliseconds
+#define radio_transmit_period 900 //time in milliseconds
 #define sensor_reading_period radio_transmit_period-180
 
 /*
@@ -456,6 +456,7 @@ void assemblePacket(RFMLib::Packet &pkt){
   pkt.data[19] = raw_pos & 255;
   
   pkt.data[20] = gps.hdop.value()/10;
+  pkt.data[21] = future_waypoints_len;
   #if verbosity != 0
   Serial.print("GPS accuracy: ");
   Serial.println(gps.hdop.value());
@@ -465,10 +466,10 @@ void assemblePacket(RFMLib::Packet &pkt){
   Serial.println(gps.location.lng(),6);
   #endif
   //incremental counter
-  pkt.data[21] = pkt_inc;
+  pkt.data[22] = pkt_inc;
   pkt_inc++;
   //set length
-  pkt.len = 22;
+  pkt.len = 23;
   
   //ir data append here
 }
