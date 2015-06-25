@@ -67,7 +67,7 @@ boolean motors_armed = true;
 #define computer_serial_baud_rate 38400
 
 #define verbosity 1 //verbosity for Serial debug
-#define current_software_version "1.3.2"//Major revision; minor revision; build
+#define current_software_version "1.4.2"//Major revision; minor revision; build
 #define heading_tolerance 5
 
 #define latitude_sign_positive false //Latitude sign
@@ -89,7 +89,6 @@ boolean motors_armed = true;
  * Length of next waypoints array
  * Radio transmission timer.
  * Sensor reading timer
- * Packet incremental counter
  * Packet received boolean
  * Manual motor control status
  * MS5637 read already?
@@ -104,7 +103,6 @@ double future_waypoints[10];//Long, lat; long,lat;long,lat...
 byte future_waypoints_len;
 uint32_t radio_transmit_timer;
 uint32_t sensor_read_timer;
-byte pkt_inc=0;
 boolean pkt_rx = false;
 byte manual[] = {255,255};//assign to 255 to disable override, otherwise setting as normal.
 
@@ -136,7 +134,7 @@ boolean read_sens = false;
   #endif
   Serial1.begin(gps_serial_baud_rate);
   SPI.begin();//Join the SPI bus
-  byte my_config[5] = {0x44,0x84,0x88,0xAC,0xCD};//radio settings
+  byte my_config[5] = {0x64,0x74,0xFA,0xAC,0xCD};//radio settings
   radio.configure(my_config);//Radio configuration
   
   Wire.begin();//join the I2C bus
@@ -166,6 +164,8 @@ void loop(){
   if(read_sens){
    if(ms5637_read){
     sns.pollHYT271();
+    Serial.println("Read hygro");
+    Serial.println(sns.humidity);
     read_sens = false;
     sensor_read_timer = millis(); 
     ms5637_read = false;
@@ -177,6 +177,9 @@ void loop(){
   }
   if(radio.rfm_done) finishRFM();
   while(Serial1.available())gps.encode(Serial1.read());//Read in NMEA GPS data
+  Serial.println("--=-=-=-=--");
+  Serial.println((millis()-radio_transmit_timer));
+  Serial.println(radio.rfm_status);
   if((millis()-radio_transmit_timer) > radio_transmit_period && radio.rfm_status != 1)
     transmitTime();
   if(future_waypoints_len==0 && manual[0]==255){//If there are no more waypoints to visit
@@ -229,6 +232,7 @@ int16_t detChange(uint16_t old, uint16_t changed){//course change mechanism
 }
 
 void transmitTime(){
+      Serial.println("time to tx");
       if(radio.rfm_status==2){
       RFMLib::Packet p;
      radio.endRX( p);
@@ -319,7 +323,7 @@ void decodePacket(RFMLib::Packet pkt){
      break;
     case 1://add waypoint-8 bytes
     #if verbosity > 0
-    Serial.println("Waypoint add request.");
+    Serial.println("Waypoint add request:");
     #endif
       if(future_waypoints_len <5){
         byte base_index = future_waypoints_len *2;
@@ -331,10 +335,13 @@ void decodePacket(RFMLib::Packet pkt){
         future_waypoints[base_index+1] = ((pkt.data[i+5]<<24)|(pkt.data[i+6]<<16)| (pkt.data[i+7]<<8)|pkt.data[i+8])/1000000;
         #if verbosity > 0
         Serial.println("Waypoint added.");
+        Serial.print(future_waypoints[base_index]);
+        Serial.print(", ");
+        Serial.println(future_waypoints[base_index+1]);
         #endif
       }
       #if verbosity > 0
-      else Serial.println("No more waypoint slots available now.");
+      else Serial.println("No more waypoint slots available now. Request ignored.");
       #endif
       i+=8;
     break;
@@ -400,6 +407,7 @@ void assemblePacket(RFMLib::Packet &pkt){
   //round the pressure and shave a decimal place off to fit it into 16 bits
   //saving two bytes of valuable bandwidth
   int32_t pr_calc = sns.pressure;
+  Serial.println(sns.humidity);
   byte round_byte = ((pr_calc % 10)>4)?1:0;
   pr_calc /= 10;
   pr_calc += (int16_t) round_byte;
@@ -454,10 +462,10 @@ void assemblePacket(RFMLib::Packet &pkt){
   Serial.println(gps.location.lng(),6);
   #endif
   //incremental counter
-  pkt.data[22] = pkt_inc;
-  pkt_inc++;
+
+
   //set length
-  pkt.len = 23;
+  pkt.len = 22;
   
   //ir data append here
 }
